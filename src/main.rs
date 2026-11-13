@@ -28,7 +28,9 @@ use wry::WebViewBuilder;
 
 static WEB: Dir = include_dir!("$CARGO_MANIFEST_DIR/web");
 const PORT: u16 = 23456;
-const PACKS: [&str; 3] = ["clawd", "clawd-pet", "mascot"];
+const PACKS: [&str; 5] = ["clawd", "clawd-pet", "mascot", "calico", "cloudling"];
+const APP_NAME: &str = "Claude Task Pet";
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const SIZES: [u32; 5] = [96, 128, 160, 220, 300];
 const LABEL_W: u32 = 120; // extra width so the hover label has room
 const LABEL_H: u32 = 60; // room under the pet for the task + model lines
@@ -107,6 +109,43 @@ const STATES: &[(&str, [&str; 3])] = &[
     ("ratelimit", ["clawd-idle-low-battery", "clawd-429,clawd-battery-low", "gag-tokens"]),
 ];
 
+// Same states for the Calico (APNG) and Cloudling (SVG) themes from clawd-on-desk: [calico, cloudling].
+const STATES2: &[(&str, [&str; 2])] = &[
+    ("idle", ["calico-idle,calico-mini-idle", "cloudling-idle,cloudling-mini-idle"]),
+    ("bored", ["calico-yawning,calico-dozing", "cloudling-idle-to-dozing,cloudling-dozing"]),
+    ("sleep", ["calico-sleeping,calico-collapsing", "cloudling-sleeping,cloudling-dozing-to-sleeping"]),
+    ("greet", ["calico-waking,calico-mini-enter", "cloudling-sleeping-to-idle,cloudling-mini-enter-roll-in"]),
+    ("bye", ["calico-mini-peek,calico-roam-crabwalk", "cloudling-mini-peek,cloudling-mini-crabwalk"]),
+    ("thinking", ["calico-thinking", "cloudling-thinking"]),
+    ("reading", ["calico-thinking", "cloudling-idle-reading"]),
+    ("searching", ["calico-thinking,calico-mini-peek", "cloudling-idle-reading"]),
+    ("web", ["calico-thinking", "cloudling-attention"]),
+    ("bash", ["calico-working-building", "cloudling-building"]),
+    ("testing", ["calico-working-juggling", "cloudling-juggling"]),
+    ("building", ["calico-working-building", "cloudling-building"]),
+    ("installing", ["calico-working-carrying", "cloudling-carrying"]),
+    ("git", ["calico-working-carrying", "cloudling-carrying"]),
+    ("push", ["calico-working-carrying", "cloudling-carrying"]),
+    ("deploy", ["calico-working-building", "cloudling-building"]),
+    ("server", ["calico-working-conducting", "cloudling-conducting"]),
+    ("writing", ["calico-working-typing", "cloudling-typing,cloudling-mini-typing"]),
+    ("designing", ["calico-working-typing", "cloudling-typing"]),
+    ("reviewing", ["calico-thinking", "cloudling-idle-reading"]),
+    ("agents", ["calico-working-conducting,calico-working-juggling", "cloudling-conducting,cloudling-juggling"]),
+    ("planning", ["calico-thinking", "cloudling-thinking"]),
+    ("skill", ["calico-working-conducting", "cloudling-conducting"]),
+    ("tool", ["calico-working-carrying", "cloudling-carrying"]),
+    ("waiting", ["calico-notification,calico-mini-alert", "cloudling-notification,cloudling-attention"]),
+    ("permission", ["calico-mini-alert", "cloudling-mini-alert"]),
+    ("question", ["calico-notification", "cloudling-attention"]),
+    ("done", ["calico-happy,calico-mini-happy", "cloudling-mini-happy"]),
+    ("subdone", ["calico-mini-happy", "cloudling-mini-happy"]),
+    ("compact", ["calico-working-sweeping", "cloudling-sweeping"]),
+    ("context", ["calico-collapsing", "cloudling-dozing"]),
+    ("error", ["calico-error", "cloudling-error"]),
+    ("ratelimit", ["calico-dozing", "cloudling-dozing"]),
+];
+
 fn pick(list: &str) -> String {
     let opts: Vec<&str> = list.split(',').collect();
     let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) as usize;
@@ -115,8 +154,51 @@ fn pick(list: &str) -> String {
 
 fn animation(pack: &str, state: &str) -> String {
     let i = PACKS.iter().position(|p| *p == pack).unwrap_or(0);
-    let row = STATES.iter().find(|(s, _)| *s == state).unwrap_or(&STATES[0]);
-    pick(row.1[i])
+    let name = if i < 3 {
+        pick(STATES.iter().find(|(s, _)| *s == state).unwrap_or(&STATES[0]).1[i])
+    } else {
+        pick(STATES2.iter().find(|(s, _)| *s == state).unwrap_or(&STATES2[0]).1[i - 3])
+    };
+    // file name with extension: Calico is animated PNG, everything else SVG
+    format!("{name}.{}", if pack == "calico" { "apng" } else { "svg" })
+}
+
+// ---------- start with Windows ----------
+
+fn reg(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("reg").args(args).creation_flags(0x0800_0000) // no console window
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .status().is_ok_and(|s| s.success())
+}
+
+fn autostart_enabled() -> bool { reg(&["query", RUN_KEY, "/v", "ClaudeTaskPet"]) }
+
+fn set_autostart(on: bool) {
+    if on {
+        let exe = env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        reg(&["add", RUN_KEY, "/v", "ClaudeTaskPet", "/t", "REG_SZ", "/d", &format!("\"{exe}\""), "/f"]);
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "ClaudeTaskPet", "/f"]);
+    }
+}
+
+// A small pixel crab for the tray icon (16x16 pattern drawn at 2x).
+fn tray_icon_image() -> tray_icon::Icon {
+    const P: [&str; 16] = [
+        "................", "................", "................", "...oooooooooo...",
+        "...oooooooooo...", "...ookoooookoo..", "...ookoooookoo..", ".oooooooooooooo.",
+        ".oooooooooooooo.", "...oooooooooo...", "...oooooooooo...", "...o.o....o.o...",
+        "...o.o....o.o...", "................", "................", "................",
+    ];
+    let mut rgba = vec![0u8; 32 * 32 * 4];
+    for y in 0..32 {
+        for x in 0..32 {
+            let px = match P[y / 2].as_bytes()[x / 2] { b'o' => [0xD9, 0x77, 0x57, 255], b'k' => [0x1a, 0x1a, 0x1a, 255], _ => [0, 0, 0, 0] };
+            rgba[(y * 32 + x) * 4..][..4].copy_from_slice(&px);
+        }
+    }
+    tray_icon::Icon::from_rgba(rgba, 32, 32).expect("icon")
 }
 
 fn bash_state(cmd: &str) -> &'static str {
@@ -216,7 +298,11 @@ fn run_install() -> std::io::Result<()> {
     let me = env::current_exe()?;
     if fs::canonicalize(&me).ok() != fs::canonicalize(&dest).ok() { fs::copy(&me, &dest)?; }
     let cmd = format!("\"{}\" hook", dest.to_string_lossy().replace('\\', "/"));
-    edit_hooks(Some(cmd))
+    edit_hooks(Some(cmd))?;
+    // Start with Windows, and start it right now (in the background, no console).
+    reg(&["add", RUN_KEY, "/v", "ClaudeTaskPet", "/t", "REG_SZ", "/d", &format!("\"{}\"", dest.to_string_lossy()), "/f"]);
+    let _ = std::process::Command::new(&dest).spawn();
+    Ok(())
 }
 
 // ---------- the pet ----------
@@ -237,7 +323,7 @@ struct Pet {
 
 impl Pet {
     fn script(&self) -> String {
-        let src = format!("assets/{}/{}.svg", self.cfg.pack, self.anim);
+        let src = format!("assets/{}/{}", self.cfg.pack, self.anim);
         let info: Vec<&str> = [self.model.as_str(), self.effort.as_str(), self.mode.as_str()]
             .into_iter().filter(|x| !x.is_empty()).collect();
         format!("document.documentElement.style.setProperty('--s','{}px');play({},{},{})",
@@ -419,7 +505,11 @@ fn main() {
     match env::args().nth(1).as_deref() {
         Some("hook") => return run_hook(),
         Some("install") => { if let Err(e) = run_install() { eprintln!("{e}"); std::process::exit(1) } return; }
-        Some("uninstall") => { if let Err(e) = edit_hooks(None) { eprintln!("{e}"); std::process::exit(1) } return; }
+        Some("uninstall") => {
+            set_autostart(false);
+            if let Err(e) = edit_hooks(None) { eprintln!("{e}"); std::process::exit(1) }
+            return;
+        }
         _ => {}
     }
 
@@ -432,7 +522,7 @@ fn main() {
 
     let (w, h) = (cfg.size + LABEL_W, cfg.size + LABEL_H);
     let mut wb = WindowBuilder::new()
-        .with_title("Claude Task Pet")
+        .with_title(APP_NAME)
         .with_decorations(false).with_transparent(true).with_always_on_top(true).with_resizable(false)
         .with_skip_taskbar(true).with_undecorated_shadow(false)
         .with_inner_size(LogicalSize::new(w, h));
@@ -454,7 +544,9 @@ fn main() {
             let path = req.uri().path().trim_start_matches('/');
             match WEB.get_file(path) {
                 Some(f) => {
-                    let mime = if path.ends_with(".svg") { "image/svg+xml" } else { "text/html; charset=utf-8" };
+                    let mime = if path.ends_with(".svg") { "image/svg+xml" }
+                        else if path.ends_with(".apng") { "image/apng" }
+                        else { "text/html; charset=utf-8" };
                     Response::builder().header(CONTENT_TYPE, mime).body(Cow::Borrowed(f.contents())).unwrap()
                 }
                 None => Response::builder().status(404).body(Cow::Borrowed(&b""[..])).unwrap(),
@@ -474,6 +566,19 @@ fn main() {
     let mut pet = Pet { cfg, state: "idle", anim: String::new(), label: idle_label("idle"), prompt: String::new(), said: String::new(), model: String::new(), effort: String::new(), mode: String::new(), generation: Arc::new(AtomicU64::new(0)), proxy };
     pet.set("idle", idle_label("idle"));
     let mut _menu_alive: Option<Menu> = None;
+
+    // Tray icon: shows the app is running in the background, even when the pet is hidden.
+    let tray_toggle = MenuItem::with_id("toggle", "Hide pet", true, None);
+    let tray_auto = CheckMenuItem::with_id("autostart", "Start with Windows", true, autostart_enabled(), None);
+    let tray_menu = Menu::new();
+    tray_menu.append_items(&[
+        &MenuItem::new(APP_NAME, false, None), &PredefinedMenuItem::separator(),
+        &tray_toggle, &tray_auto, &PredefinedMenuItem::separator(), &MenuItem::with_id("quit", "Quit", true, None),
+    ]).unwrap();
+    let tray = tray_icon::TrayIconBuilder::new()
+        .with_icon(tray_icon_image()).with_tooltip(APP_NAME).with_menu(Box::new(tray_menu))
+        .build().ok();
+    let mut visible = true;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -497,6 +602,18 @@ fn main() {
             },
             Event::UserEvent(UserEvent::Menu(id)) => {
                 if id == "quit" { *control_flow = ControlFlow::Exit; return; }
+                if id == "toggle" {
+                    visible = !visible;
+                    window.set_visible(visible);
+                    tray_toggle.set_text(if visible { "Hide pet" } else { "Show pet" });
+                    return;
+                }
+                if id == "autostart" {
+                    let on = !autostart_enabled();
+                    set_autostart(on);
+                    tray_auto.set_checked(autostart_enabled());
+                    return;
+                }
                 if let Some(p) = id.strip_prefix("pack:") { pet.cfg.pack = p.to_string(); pet.anim = animation(p, pet.state); }
                 if let Some(s) = id.strip_prefix("size:").and_then(|s| s.parse().ok()) {
                     pet.cfg.size = s;
@@ -507,6 +624,9 @@ fn main() {
             }
             _ => {}
         }
-        if refresh { let _ = webview.evaluate_script(&pet.script()); }
+        if refresh {
+            let _ = webview.evaluate_script(&pet.script());
+            if let Some(t) = &tray { let _ = t.set_tooltip(Some(format!("{APP_NAME}: {}", trunc(&pet.label, 100)))); }
+        }
     });
 }

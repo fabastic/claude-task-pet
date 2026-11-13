@@ -12,8 +12,9 @@ claude-task-pet.exe install     # copies itself to %LOCALAPPDATA%\ClaudeTaskPet 
 claude-task-pet.exe uninstall   # removes the hooks
 ```
 
+- Runs in the background with a tray icon (Hide/Show pet, Start with Windows, Quit). `install` turns on start-with-Windows.
 - Drag it anywhere; its position is remembered.
-- Right-click: Character (`clawd` / `clawd-pet` / `mascot`), Size, Quit.
+- Right-click: Character (`clawd` / `clawd-pet` / `mascot` / `calico` / `cloudling`), Size, Quit.
 - Hover: shows the current task, e.g. "Editing main.rs" or "Running: npm test".
 
 Settings live in `%APPDATA%\claude-task-pet\pet.json`.
@@ -31,6 +32,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `parking_lot` is pinned to 0.12.3 in `
 The animations are not mine and are not covered by any license here:
 
 - `web/assets/clawd`: from [rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk). All Rights Reserved; Clawd is Anthropic's character; non-commercial only.
+- `web/assets/calico`, `web/assets/cloudling`: also from clawd-on-desk (Calico © rullerzhou-afk, All Rights Reserved).
 - `web/assets/mascot`: from [Harriszed/claude-desktop-pet](https://github.com/Harriszed/claude-desktop-pet). No redistribution license for the artwork.
 - `web/assets/clawd-pet`: from [abderrahimghazali/clawd-pet](https://github.com/abderrahimghazali/clawd-pet), MIT licensed (Clawd itself is Anthropic's character).
 
