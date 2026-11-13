@@ -31,7 +31,7 @@ const PORT: u16 = 23456;
 const PACKS: [&str; 2] = ["clawd", "mascot"];
 const SIZES: [u32; 5] = [96, 128, 160, 220, 300];
 const LABEL_W: u32 = 120; // extra width so the hover label has room
-const LABEL_H: u32 = 30;
+const LABEL_H: u32 = 60; // room under the pet for the task + model lines
 
 enum UserEvent {
     Hook(Value),
@@ -176,6 +176,10 @@ struct Pet {
     state: &'static str,
     label: String,
     prompt: String,
+    said: String,
+    model: String,
+    effort: String,
+    mode: String,
     generation: Arc<AtomicU64>,
     proxy: EventLoopProxy<UserEvent>,
 }
@@ -183,8 +187,10 @@ struct Pet {
 impl Pet {
     fn script(&self) -> String {
         let src = format!("assets/{}/{}.svg", self.cfg.pack, animation(&self.cfg.pack, self.state));
-        format!("document.documentElement.style.setProperty('--s','{}px');play({},{})",
-            self.cfg.size, json!(src), json!(self.label))
+        let info: Vec<&str> = [self.model.as_str(), self.effort.as_str(), self.mode.as_str()]
+            .into_iter().filter(|x| !x.is_empty()).collect();
+        format!("document.documentElement.style.setProperty('--s','{}px');play({},{},{})",
+            self.cfg.size, json!(src), json!(self.label), json!(info.join(" \u{00b7} ")))
     }
 
     fn set(&mut self, state: &'static str, label: String) {
@@ -205,25 +211,97 @@ impl Pet {
 
     fn on_hook(&mut self, e: &Value) -> bool {
         let tool = e["tool_name"].as_str().unwrap_or("");
-        let working = || if self.prompt.is_empty() { "Thinking…".to_string() } else { format!("Working on: {}", self.prompt) };
+        if let Some(m) = e["permission_mode"].as_str() { self.mode = pretty_mode(m); }
+        if let Some(x) = e["effort"].as_str().or(e["effort_level"].as_str()) { self.effort = capitalize(x); }
+        if let Some(m) = e["model"].as_str().or(e["model"]["id"].as_str()) { self.model = pretty_model(m); }
+        if let Some(t) = e["transcript_path"].as_str() {
+            let (model, said) = read_transcript(t);
+            if !model.is_empty() { self.model = pretty_model(&model); }
+            if !said.is_empty() { self.said = said; }
+        }
+        let working = || if !self.said.is_empty() { trunc(&self.said, 90) }
+            else if !self.prompt.is_empty() { format!("Working on: {}", self.prompt) }
+            else { "Deciding what to do next".to_string() };
         let (state, label) = match e["hook_event_name"].as_str().unwrap_or("") {
             "SessionStart" => ("greet", "Hi! New Claude session".to_string()),
             "UserPromptSubmit" => {
-                self.prompt = trunc(e["prompt"].as_str().unwrap_or(""), 50);
+                self.said.clear();
+                self.prompt = trunc(e["prompt"].as_str().unwrap_or(""), 70);
                 ("thinking", format!("Thinking about: {}", self.prompt))
             }
-            "PreToolUse" => tool_state(tool, &e["tool_input"]),
-            "PostToolUse" | "SubagentStop" => ("thinking", working()),
+            "PreToolUse" => {
+                // Same text the Claude app shows for the step, when the tool call carries one.
+                let (state, fallback) = tool_state(tool, &e["tool_input"]);
+                let desc = e["tool_input"]["description"].as_str().unwrap_or("").trim();
+                (state, if desc.is_empty() { fallback } else { trunc(desc, 90) })
+            }
+            // Keep showing the step that just ran until the next one starts.
+            "PostToolUse" => ("thinking", if self.label.is_empty() { working() } else { self.label.clone() }),
+            "SubagentStop" => ("thinking", working()),
             "PostToolUseFailure" => ("error", format!("{} failed", if tool.is_empty() { "A tool" } else { tool })),
             "Notification" => ("waiting", trunc(e["message"].as_str().unwrap_or("Waiting for you"), 70)),
             "PreCompact" => ("compact", "Compacting the conversation".into()),
-            "Stop" => ("done", "Done! Your turn".into()),
+            "Stop" => ("done", if self.said.is_empty() { "Done! Your turn".into() } else { format!("Done: {}", trunc(&self.said, 80)) }),
             "SessionEnd" => ("idle", "Session ended".into()),
             _ => return false,
         };
         self.set(state, label);
         true
     }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+fn pretty_mode(m: &str) -> String {
+    match m {
+        "default" => "Ask".into(), "acceptEdits" => "Accept edits".into(), "plan" => "Plan".into(),
+        "bypassPermissions" => "Bypass".into(), "dontAsk" => "Don't ask".into(), o => capitalize(o),
+    }
+}
+
+// "claude-opus-5-5" -> "Opus 5.5"; "claude-sonnet-4-5-20250929" -> "Sonnet 4.5"
+fn pretty_model(id: &str) -> String {
+    let id = id.trim_start_matches("claude-");
+    let parts: Vec<&str> = id.split(['-', '[']).collect();
+    let name = parts.iter().find(|p| !p.is_empty() && p.chars().all(|c| c.is_alphabetic())).map(|p| capitalize(p)).unwrap_or_default();
+    let nums: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit())).collect();
+    if name.is_empty() { id.to_string() } else if nums.is_empty() { name } else { format!("{} {}", name, nums.join(".")) }
+}
+
+// Latest model id and the latest thing the agent said, from the tail of the session transcript.
+fn read_transcript(path: &str) -> (String, String) {
+    use std::io::{Seek, SeekFrom};
+    let Ok(mut f) = fs::File::open(path) else { return Default::default() };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(512 * 1024)));
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    let (mut model, mut said) = (String::new(), String::new());
+    for line in text.lines().rev() {
+        if !line.contains("\"assistant\"") { continue; }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v["type"] != "assistant" || v["isSidechain"] == true { continue; }
+        if model.is_empty() {
+            if let Some(m) = v["message"]["model"].as_str() { if !m.starts_with('<') { model = m.into(); } }
+        }
+        if said.is_empty() {
+            if let Some(blocks) = v["message"]["content"].as_array() {
+                let last = blocks.iter().rev().filter(|b| b["type"] == "text")
+                    .filter_map(|b| b["text"].as_str()).find(|t| !t.trim().is_empty());
+                if let Some(t) = last {
+                    // first sentence, without markdown symbols
+                    let clean = t.replace(['*', '`', '#'], "");
+                    said = clean.trim().split_inclusive(['.', '!', '?', '\n']).next().unwrap_or("").trim().to_string();
+                }
+            }
+        }
+        if !model.is_empty() && !said.is_empty() { break; }
+    }
+    (model, said)
 }
 
 fn idle_label(state: &str) -> String {
@@ -322,7 +400,7 @@ fn main() {
     let server_proxy = proxy.clone();
     thread::spawn(move || serve(listener, server_proxy));
 
-    let mut pet = Pet { cfg, state: "idle", label: idle_label("idle"), prompt: String::new(), generation: Arc::new(AtomicU64::new(0)), proxy };
+    let mut pet = Pet { cfg, state: "idle", label: idle_label("idle"), prompt: String::new(), said: String::new(), model: String::new(), effort: String::new(), mode: String::new(), generation: Arc::new(AtomicU64::new(0)), proxy };
     pet.set("idle", idle_label("idle"));
     let mut _menu_alive: Option<Menu> = None;
 

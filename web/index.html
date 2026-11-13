@@ -2,27 +2,38 @@
 <html><head><meta charset="utf-8">
 <style>
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
-  #wrap { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; }
-  #bubble {
-    align-self: center; max-width: calc(100% - 8px); margin-bottom: 4px;
-    font: 600 11px/1.3 "Segoe UI", system-ui, sans-serif; color: #fff;
-    background: rgba(20, 20, 20, .85); padding: 4px 8px; border-radius: 8px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; pointer-events: none;
-  }
-  #pet { flex: none; align-self: center; width: var(--s, 160px); aspect-ratio: 1; cursor: grab; }
+  /* pet on top, the task + model labels directly underneath it */
+  #wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; }
+  #pet { flex: none; width: var(--s, 160px); aspect-ratio: 1; cursor: grab; }
   #pet img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
-  #wrap.hover #bubble { opacity: 1; transform: none; }
+  #info {
+    display: flex; flex-direction: column; align-items: center; gap: 3px; max-width: calc(100% - 8px);
+    margin-top: -6px; opacity: 0; transform: translateY(-4px); transition: opacity .15s, transform .15s; pointer-events: none;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  #task {
+    max-width: 100%; box-sizing: border-box; font: 600 11px/1.3 inherit; color: #fff;
+    background: rgba(20, 20, 20, .88); padding: 4px 8px; border-radius: 8px; text-align: center;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  #model {
+    font: 500 9.5px/1.2 inherit; color: rgba(255, 255, 255, .8); background: rgba(20, 20, 20, .7);
+    padding: 2px 6px; border-radius: 6px; white-space: nowrap;
+  }
+  #model:empty { display: none; }
+  #wrap.hover #info { opacity: 1; transform: none; }
 </style></head>
-<body><div id="wrap"><div id="bubble"></div><div id="pet"><img id="img" alt=""></div></div>
+<body><div id="wrap"><div id="pet"><img id="img" alt=""></div>
+<div id="info"><div id="task"></div><div id="model"></div></div></div>
 <script>
-  const wrap = document.getElementById('wrap'), img = document.getElementById('img'),
-        bubble = document.getElementById('bubble'), pet = document.getElementById('pet')
-  let n = 0
-  // Called from Rust: switch animation (restarts from frame 0) and the hover label.
-  window.play = (src, label) => {
-    if (src) img.src = `${window.PET_BASE}${src}?${++n}`
-    bubble.textContent = label
+  const wrap = document.getElementById('wrap'), img = document.getElementById('img'), pet = document.getElementById('pet')
+  const task = document.getElementById('task'), model = document.getElementById('model')
+  let n = 0, lastSrc = ''
+  // Called from Rust: animation (restarts only when it changes), current task, "Model · Effort · Mode".
+  window.play = (src, label, info) => {
+    if (src && src !== lastSrc) { lastSrc = src; img.src = `${window.PET_BASE}${src}?${++n}` }
+    task.textContent = label
+    model.textContent = info || ''
   }
   pet.addEventListener('mouseenter', () => wrap.classList.add('hover'))
   pet.addEventListener('mouseleave', () => wrap.classList.remove('hover'))
