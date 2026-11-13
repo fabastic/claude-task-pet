@@ -1,0 +1,18 @@
+[package]
+name = "claude-task-pet"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tao = "0.30"
+wry = "0.47"
+muda = "0.15"
+serde_json = "1"
+include_dir = "0.7"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

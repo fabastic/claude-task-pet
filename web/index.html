@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+  #wrap { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; }
+  #bubble {
+    align-self: center; max-width: calc(100% - 8px); margin-bottom: 4px;
+    font: 600 11px/1.3 "Segoe UI", system-ui, sans-serif; color: #fff;
+    background: rgba(20, 20, 20, .85); padding: 4px 8px; border-radius: 8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; pointer-events: none;
+  }
+  #pet { flex: none; align-self: center; width: var(--s, 160px); aspect-ratio: 1; cursor: grab; }
+  #pet img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+  #wrap.hover #bubble { opacity: 1; transform: none; }
+</style></head>
+<body><div id="wrap"><div id="bubble"></div><div id="pet"><img id="img" alt=""></div></div>
+<script>
+  const wrap = document.getElementById('wrap'), img = document.getElementById('img'),
+        bubble = document.getElementById('bubble'), pet = document.getElementById('pet')
+  let n = 0
+  // Called from Rust: switch animation (restarts from frame 0) and the hover label.
+  window.play = (src, label) => {
+    if (src) img.src = `${window.PET_BASE}${src}?${++n}`
+    bubble.textContent = label
+  }
+  pet.addEventListener('mouseenter', () => wrap.classList.add('hover'))
+  pet.addEventListener('mouseleave', () => wrap.classList.remove('hover'))
+  pet.addEventListener('mousedown', e => { if (e.button === 0) window.ipc.postMessage('drag') })
+  pet.addEventListener('contextmenu', e => { e.preventDefault(); window.ipc.postMessage('menu') })
+  window.ipc.postMessage('ready')
+</script></body></html>
