@@ -291,18 +291,79 @@ fn edit_hooks(command: Option<String>) -> std::io::Result<()> {
     fs::write(&file, serde_json::to_string_pretty(&s)?)
 }
 
+const UNINSTALL_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeTaskPet";
+
+fn install_dir() -> PathBuf { PathBuf::from(env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("ClaudeTaskPet") }
+fn installed_exe() -> PathBuf { install_dir().join("claude-task-pet.exe") }
+fn start_menu_link() -> PathBuf {
+    PathBuf::from(env::var("APPDATA").unwrap_or_default()).join(r"Microsoft\Windows\Start Menu\Programs").join(format!("{APP_NAME}.lnk"))
+}
+fn is_installed_copy() -> bool {
+    env::current_exe().ok().and_then(|p| fs::canonicalize(p).ok()) == fs::canonicalize(installed_exe()).ok()
+}
+
+fn hidden(cmd: &str, args: &[&str]) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new(cmd).args(args).creation_flags(0x0800_0000)
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+}
+
+// Ask a running pet to do something ("show" / "quit"). Returns true if one answered.
+fn tell_running_pet(cmd: &str) -> bool {
+    let addr: SocketAddr = ([127, 0, 0, 1], PORT).into();
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else { return false };
+    let body = json!({ "pet_cmd": cmd }).to_string();
+    let _ = s.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = write!(s, "POST /cmd HTTP/1.1\r\nHost: pet\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+    let _ = s.read(&mut [0u8; 64]);
+    true
+}
+
+/// Installs for the current user (no admin): copies the exe, Claude hooks, start with Windows,
+/// Start menu shortcut and a Settings > Apps entry, then starts the pet.
 fn run_install() -> std::io::Result<()> {
-    let dir = PathBuf::from(env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("ClaudeTaskPet");
-    fs::create_dir_all(&dir)?;
-    let dest = dir.join("claude-task-pet.exe");
+    if tell_running_pet("quit") { thread::sleep(Duration::from_millis(1200)); }
+    fs::create_dir_all(install_dir())?;
+    let dest = installed_exe();
     let me = env::current_exe()?;
     if fs::canonicalize(&me).ok() != fs::canonicalize(&dest).ok() { fs::copy(&me, &dest)?; }
-    let cmd = format!("\"{}\" hook", dest.to_string_lossy().replace('\\', "/"));
-    edit_hooks(Some(cmd))?;
-    // Start with Windows, and start it right now (in the background, no console).
-    reg(&["add", RUN_KEY, "/v", "ClaudeTaskPet", "/t", "REG_SZ", "/d", &format!("\"{}\"", dest.to_string_lossy()), "/f"]);
-    let _ = std::process::Command::new(&dest).spawn();
+    let exe = dest.to_string_lossy().into_owned();
+
+    edit_hooks(Some(format!("\"{}\" hook", exe.replace('\\', "/"))))?;
+    reg(&["add", RUN_KEY, "/v", "ClaudeTaskPet", "/t", "REG_SZ", "/d", &format!("\"{exe}\""), "/f"]);
+
+    let link = start_menu_link().to_string_lossy().replace('\'', "''");
+    let ps = format!("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{link}');$s.TargetPath='{e}';\
+        $s.IconLocation='{e},0';$s.Description='Desktop pet that shows what Claude Code is doing';$s.Save()", e = exe.replace('\'', "''"));
+    hidden("powershell", &["-NoProfile", "-NonInteractive", "-Command", &ps]);
+
+    let size_kb = fs::metadata(&dest).map(|m| m.len() / 1024).unwrap_or(0).to_string();
+    let uninstall = format!("\"{exe}\" uninstall");
+    for (name, kind, value) in [
+        ("DisplayName", "REG_SZ", APP_NAME), ("DisplayIcon", "REG_SZ", &exe), ("DisplayVersion", "REG_SZ", env!("CARGO_PKG_VERSION")),
+        ("Publisher", "REG_SZ", APP_NAME), ("InstallLocation", "REG_SZ", &install_dir().to_string_lossy()),
+        ("UninstallString", "REG_SZ", &uninstall), ("QuietUninstallString", "REG_SZ", &uninstall),
+        ("NoModify", "REG_DWORD", "1"), ("NoRepair", "REG_DWORD", "1"), ("EstimatedSize", "REG_DWORD", &size_kb),
+    ] {
+        reg(&["add", UNINSTALL_KEY, "/v", name, "/t", kind, "/d", value, "/f"]);
+    }
+
+    std::process::Command::new(&dest).arg("--run").spawn()?;
     Ok(())
+}
+
+fn run_uninstall() {
+    tell_running_pet("quit");
+    set_autostart(false);
+    let _ = edit_hooks(None);
+    let _ = fs::remove_file(start_menu_link());
+    reg(&["delete", UNINSTALL_KEY, "/f"]);
+    // The exe can't delete itself while running: remove the folder a moment after we exit.
+    let dir = install_dir().to_string_lossy().into_owned();
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", &format!("ping 127.0.0.1 -n 3 >nul & rmdir /s /q \"{dir}\"")])
+        .creation_flags(0x0800_0000).spawn();
 }
 
 // ---------- the pet ----------
@@ -505,16 +566,14 @@ fn main() {
     match env::args().nth(1).as_deref() {
         Some("hook") => return run_hook(),
         Some("install") => { if let Err(e) = run_install() { eprintln!("{e}"); std::process::exit(1) } return; }
-        Some("uninstall") => {
-            set_autostart(false);
-            if let Err(e) = edit_hooks(None) { eprintln!("{e}"); std::process::exit(1) }
-            return;
-        }
-        _ => {}
+        Some("uninstall") => return run_uninstall(),
+        // Double-clicking the downloaded exe installs it (once) and starts the installed copy.
+        None if !is_installed_copy() => { let _ = run_install(); return; }
+        _ => {} // "--run", "--portable", or launched from the installed location
     }
 
-    // Only one pet: if the port is taken, another pet is already running.
-    let Ok(listener) = TcpListener::bind(("127.0.0.1", PORT)) else { return };
+    // Only one pet: if it's already running, just bring it back into view.
+    let Ok(listener) = TcpListener::bind(("127.0.0.1", PORT)) else { tell_running_pet("show"); return };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -586,7 +645,15 @@ fn main() {
         match event {
             Event::WindowEvent { event: WindowEvent::Moved(p), .. } => { pet.cfg.x = Some(p.x); pet.cfg.y = Some(p.y); save_config(&pet.cfg); }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => *control_flow = ControlFlow::Exit,
-            Event::UserEvent(UserEvent::Hook(v)) => refresh = pet.on_hook(&v),
+            Event::UserEvent(UserEvent::Hook(v)) => match v["pet_cmd"].as_str() {
+                Some("quit") => { *control_flow = ControlFlow::Exit; return; }
+                Some("show") => {
+                    visible = true;
+                    window.set_visible(true);
+                    tray_toggle.set_text("Hide pet");
+                }
+                _ => refresh = pet.on_hook(&v),
+            },
             Event::UserEvent(UserEvent::Timeout(g, next)) if g == pet.generation.load(Ordering::SeqCst) => {
                 pet.set(next, idle_label(next)); refresh = true;
             }

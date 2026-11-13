@@ -4,18 +4,23 @@ A tiny desktop pet that shows what Claude Code is doing. It is just the animatio
 
 Written in Rust (tao + wry on the system WebView2). The release exe is about 2.7 MB and uses about 28 MB of RAM.
 
+## Install
+
+Download `claude-task-pet.exe` from the latest release and double-click it. That's it. It installs for your user only (no admin):
+
+- copies itself to `%LOCALAPPDATA%\ClaudeTaskPet`
+- adds the Claude Code hooks to `~/.claude/settings.json` (a backup is saved next to it)
+- adds **Claude Task Pet** to the Start menu, so Windows search finds it
+- turns on start with Windows
+- adds an entry in **Settings → Apps → Installed apps**, where you can uninstall it
+
 ## Use
 
-```
-claude-task-pet.exe install     # copies itself to %LOCALAPPDATA%\ClaudeTaskPet and adds Claude Code hooks
-%LOCALAPPDATA%\ClaudeTaskPet\claude-task-pet.exe   # start the pet
-claude-task-pet.exe uninstall   # removes the hooks
-```
-
-- Runs in the background with a tray icon (Hide/Show pet, Start with Windows, Quit). `install` turns on start-with-Windows.
 - Drag it anywhere; its position is remembered.
-- Right-click: Character (`clawd` / `clawd-pet` / `mascot` / `calico` / `cloudling`), Size, Quit.
-- Hover: shows the current task, e.g. "Editing main.rs" or "Running: npm test".
+- Hover: shows what Claude is doing right now, and the model and mode underneath.
+- Right-click the pet: Character (`clawd` / `clawd-pet` / `mascot` / `calico` / `cloudling`), Size, Quit.
+- Tray icon (pixel crab): Hide/Show pet, Start with Windows, Quit.
+- Opening it from the Start menu while it's running brings a hidden pet back.
 
 Settings live in `%APPDATA%\claude-task-pet\pet.json`.
 
@@ -23,6 +28,8 @@ Settings live in `%APPDATA%\claude-task-pet\pet.json`.
 
 ```
 cargo build --release
+node tools/make-icon.js icon.ico
+rcedit target/release/claude-task-pet.exe --set-icon icon.ico --set-version-string ProductName "Claude Task Pet"
 ```
 
 On the `x86_64-pc-windows-gnu` toolchain, `parking_lot` is pinned to 0.12.3 in `Cargo.lock` so no external `dlltool`/assembler is needed.
