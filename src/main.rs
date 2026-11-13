@@ -28,7 +28,7 @@ use wry::WebViewBuilder;
 
 static WEB: Dir = include_dir!("$CARGO_MANIFEST_DIR/web");
 const PORT: u16 = 23456;
-const PACKS: [&str; 2] = ["clawd", "mascot"];
+const PACKS: [&str; 3] = ["clawd", "clawd-pet", "mascot"];
 const SIZES: [u32; 5] = [96, 128, 160, 220, 300];
 const LABEL_W: u32 = 120; // extra width so the hover label has room
 const LABEL_H: u32 = 60; // room under the pet for the task + model lines
@@ -67,25 +67,69 @@ fn save_config(c: &Config) {
 
 // ---------- states & labels ----------
 
-fn animation(pack: &str, state: &str) -> &'static str {
-    let clawd = pack == "clawd";
-    match state {
-        "sleep" => if clawd { "clawd-sleeping" } else { "asleep" },
-        "greet" => if clawd { "clawd-wake" } else { "greeting" },
-        "thinking" => if clawd { "clawd-working-thinking" } else { "thinking" },
-        "reading" => if clawd { "clawd-idle-reading" } else { "reading" },
-        "searching" => if clawd { "clawd-working-debugger" } else { "searching-code" },
-        "web" => if clawd { "clawd-working-wizard" } else { "searching-web" },
-        "bash" => if clawd { "clawd-working-building" } else { "running-commands" },
-        "writing" => if clawd { "clawd-working-typing" } else { "writing" },
-        "agents" => if clawd { "clawd-working-juggling" } else { "directing-helpers" },
-        "tool" => if clawd { "clawd-working-carrying" } else { "using-tool" },
-        "waiting" => if clawd { "clawd-notification" } else { "waiting-for-you" },
-        "done" => if clawd { "clawd-happy" } else { "done" },
-        "compact" => if clawd { "clawd-working-sweeping" } else { "compacting" },
-        "error" => if clawd { "clawd-error" } else { "error" },
-        _ => if clawd { "clawd-idle-living" } else { "idle" },
-    }
+// state -> [clawd (clawd-on-desk), clawd-pet (abderrahimghazali), mascot (claude-desktop-pet)].
+// Each entry is a comma-separated list; one is picked at random every time the state starts.
+const STATES: &[(&str, [&str; 3])] = &[
+    ("idle", ["clawd-idle-living,clawd-idle-look,clawd-idle-follow,clawd-headphones-groove",
+              "clawd-idle-living,clawd-smile,clawd-music,clawd-meditating", "idle,idle-breathe,idle-look-around"]),
+    ("bored", ["clawd-idle-yawn,clawd-idle-doze,clawd-idle-bubble,clawd-coffee-hand,clawd-idle-low-battery",
+               "clawd-bored,clawd-yawning,clawd-coffee,clawd-gaming,clawd-ice-cream", "gag-coffee,gag-nap,gag-dance,gag-robot"]),
+    ("sleep", ["clawd-sleeping,clawd-collapse-sleep", "clawd-sleeping", "asleep"]),
+    ("greet", ["clawd-wake,clawd-mini-enter", "clawd-waving,clawd-smile", "greeting"]),
+    ("bye", ["clawd-mini-peek", "clawd-going-away,clawd-waving", "walking"]),
+    ("thinking", ["clawd-working-thinking,clawd-working-ultrathink", "clawd-working-thinking,clawd-idea", "thinking"]),
+    ("reading", ["clawd-idle-reading", "clawd-reading,clawd-studying", "reading"]),
+    ("searching", ["clawd-working-debugger", "clawd-detective,clawd-working-debugger", "searching-code"]),
+    ("web", ["clawd-working-wizard", "clawd-telescope,clawd-working-beacon", "searching-web"]),
+    ("bash", ["clawd-working-building", "clawd-working-tool-calling,clawd-coding", "running-commands"]),
+    ("testing", ["clawd-working-debugger", "clawd-working-testing", "testing"]),
+    ("building", ["clawd-working-building", "clawd-working-building,clawd-crafting", "running-commands"]),
+    ("installing", ["clawd-working-carrying", "clawd-loading,clawd-charging", "gag-buffering"]),
+    ("git", ["clawd-working-carrying", "clawd-working-merging", "committing"]),
+    ("push", ["clawd-working-carrying", "clawd-working-pushing,clawd-shipping", "committing"]),
+    ("deploy", ["clawd-working-building", "clawd-working-deploying,clawd-rocket", "gag-deploy"]),
+    ("server", ["clawd-headphones-groove", "clawd-working-oncall,clawd-dj", "server-running"]),
+    ("writing", ["clawd-working-typing,clawd-working-typing-boss", "clawd-working-typing,clawd-coding", "writing,typing"]),
+    ("designing", ["clawd-designing", "clawd-painting,clawd-crafting", "writing"]),
+    ("reviewing", ["clawd-working-debugger", "clawd-working-reviewing,clawd-skeptical", "reading"]),
+    ("agents", ["clawd-working-juggling", "clawd-working-conducting,clawd-working-juggling,clawd-working-pairing", "directing-helpers"]),
+    ("planning", ["clawd-working-thinking", "clawd-working-meeting,clawd-idea", "plan-progress"]),
+    ("skill", ["clawd-working-wizard", "clawd-magic", "using-tool"]),
+    ("tool", ["clawd-working-carrying", "clawd-working-tool-calling", "using-tool"]),
+    ("waiting", ["clawd-notification,clawd-mini-alert", "clawd-notification,clawd-mail", "waiting-for-you"]),
+    ("permission", ["clawd-mini-alert,clawd-notification", "clawd-security,clawd-hopeful", "waiting-for-you"]),
+    ("question", ["clawd-notification", "clawd-hopeful,clawd-confused", "waiting-for-you"]),
+    ("done", ["clawd-happy,clawd-react-double-jump,clawd-heart-eyes", "clawd-celebrating,clawd-happy,clawd-trophy,clawd-clapping,clawd-200", "done"]),
+    ("subdone", ["clawd-happy", "clawd-clapping,clawd-201", "done"]),
+    ("compact", ["clawd-working-sweeping", "clawd-working-sweeping", "compacting"]),
+    ("context", ["clawd-dizzy", "clawd-working-context-full,clawd-working-overheated", "context-nearly-full"]),
+    ("error", ["clawd-error,clawd-dizzy,clawd-react-annoyed", "clawd-error,clawd-facepalm,clawd-500,clawd-working-firefighting", "error"]),
+    ("ratelimit", ["clawd-idle-low-battery", "clawd-429,clawd-battery-low", "gag-tokens"]),
+];
+
+fn pick(list: &str) -> String {
+    let opts: Vec<&str> = list.split(',').collect();
+    let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) as usize;
+    opts[n % opts.len()].to_string()
+}
+
+fn animation(pack: &str, state: &str) -> String {
+    let i = PACKS.iter().position(|p| *p == pack).unwrap_or(0);
+    let row = STATES.iter().find(|(s, _)| *s == state).unwrap_or(&STATES[0]);
+    pick(row.1[i])
+}
+
+fn bash_state(cmd: &str) -> &'static str {
+    let c = format!(" {} ", cmd.to_lowercase());
+    let has = |w: &[&str]| w.iter().any(|x| c.contains(x));
+    if has(&["git push", "gh pr create", "gh release"]) { "push" }
+    else if has(&["git commit", "git merge", "git rebase", "git cherry-pick"]) { "git" }
+    else if has(&["deploy", "vercel", "netlify", "wrangler", "kubectl apply"]) { "deploy" }
+    else if has(&[" test", "jest", "vitest", "pytest", "playwright", "cypress", " npm t "]) { "testing" }
+    else if has(&["install", "npm i ", "pnpm add", "yarn add", "cargo add", "winget ", "brew "]) { "installing" }
+    else if has(&["build", "cargo b ", " tsc", " make", "webpack", "vite build", "compile"]) { "building" }
+    else if has(&["dev ", "serve", " start", "uvicorn", "runserver"]) { "server" }
+    else { "bash" }
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -105,13 +149,19 @@ fn tool_state(tool: &str, input: &Value) -> (&'static str, String) {
         "Glob" | "LS" => ("searching", format!("Finding files {}", trunc(&s("pattern"), 40))),
         "WebSearch" => ("web", format!("Searching the web: {}", trunc(&s("query"), 40))),
         "WebFetch" => ("web", format!("Reading {}", trunc(&s("url"), 50))),
-        "Bash" | "PowerShell" => {
-            let d = s("description");
-            ("bash", if d.is_empty() { format!("Running: {}", trunc(&s("command"), 50)) } else { trunc(&d, 60) })
+        "Bash" | "PowerShell" => (bash_state(&s("command")), format!("Running: {}", trunc(&s("command"), 50))),
+        "Edit" | "MultiEdit" | "NotebookEdit" | "Write" => {
+            let f = file_name(&s("file_path"));
+            let design = [".css", ".scss", ".html", ".svg", ".png", ".figma"].iter().any(|x| f.to_lowercase().ends_with(x));
+            (if design { "designing" } else { "writing" }, format!("{} {}", if tool == "Write" { "Writing" } else { "Editing" }, f))
         }
-        "Edit" | "MultiEdit" | "NotebookEdit" => ("writing", format!("Editing {}", file_name(&s("file_path")))),
-        "Write" => ("writing", format!("Writing {}", file_name(&s("file_path")))),
-        "Task" | "Agent" => ("agents", format!("Delegating: {}", trunc(&s("description"), 50))),
+        "Task" | "Agent" | "Workflow" => ("agents", format!("Delegating: {}", trunc(&s("description"), 50))),
+        "TodoWrite" | "EnterPlanMode" | "ExitPlanMode" | "TaskCreate" | "TaskUpdate" => ("planning", "Planning the next steps".into()),
+        "AskUserQuestion" => ("question", "Has a question for you".into()),
+        "Skill" => ("skill", format!("Using skill {}", trunc(&s("skill"), 40))),
+        t if t.ends_with("update_plan") => ("planning", "Updating the task list".into()),
+        t if t.contains("code-review") || t == "ReportFindings" => ("reviewing", "Reviewing code".into()),
+        t if t.starts_with("mcp__") => ("tool", format!("Using {}", trunc(t.rsplit("__").next().unwrap_or(t), 40).replace('_', " "))),
         "" => ("tool", "Using a tool".into()),
         t => ("tool", format!("Using {}", trunc(t, 40))),
     }
@@ -130,8 +180,8 @@ fn run_hook() {
     }
 }
 
-const EVENTS: [&str; 10] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
-    "Notification", "PreCompact", "SubagentStop", "Stop", "SessionEnd"];
+const EVENTS: [&str; 12] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+    "PermissionRequest", "Notification", "PreCompact", "SubagentStop", "Stop", "StopFailure", "SessionEnd"];
 
 fn is_pet_hook(group: &Value) -> bool {
     group["hooks"].as_array().is_some_and(|hs| hs.iter().any(|h| {
@@ -174,6 +224,7 @@ fn run_install() -> std::io::Result<()> {
 struct Pet {
     cfg: Config,
     state: &'static str,
+    anim: String,
     label: String,
     prompt: String,
     said: String,
@@ -186,7 +237,7 @@ struct Pet {
 
 impl Pet {
     fn script(&self) -> String {
-        let src = format!("assets/{}/{}.svg", self.cfg.pack, animation(&self.cfg.pack, self.state));
+        let src = format!("assets/{}/{}.svg", self.cfg.pack, self.anim);
         let info: Vec<&str> = [self.model.as_str(), self.effort.as_str(), self.mode.as_str()]
             .into_iter().filter(|x| !x.is_empty()).collect();
         format!("document.documentElement.style.setProperty('--s','{}px');play({},{},{})",
@@ -194,13 +245,16 @@ impl Pet {
     }
 
     fn set(&mut self, state: &'static str, label: String) {
+        // Same state again (e.g. two edits in a row): keep the current animation running.
+        if state != self.state || self.anim.is_empty() { self.anim = animation(&self.cfg.pack, state); }
         self.state = state;
         self.label = label;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        // Short states fall back to idle; idle dozes off after 5 minutes.
+        // Short reactions fall back to idle; idle gets bored after 2 minutes, then falls asleep.
         let after = match state {
-            "greet" | "done" | "error" => Some((5, "idle")),
-            "idle" => Some((300, "sleep")),
+            "greet" | "done" | "subdone" | "error" | "bye" => Some((6, "idle")),
+            "idle" => Some((120, "bored")),
+            "bored" => Some((180, "sleep")),
             _ => None,
         };
         if let Some((secs, next)) = after {
@@ -237,12 +291,25 @@ impl Pet {
             }
             // Keep showing the step that just ran until the next one starts.
             "PostToolUse" => ("thinking", if self.label.is_empty() { working() } else { self.label.clone() }),
-            "SubagentStop" => ("thinking", working()),
+            "SubagentStop" => ("subdone", "A helper agent finished".into()),
             "PostToolUseFailure" => ("error", format!("{} failed", if tool.is_empty() { "A tool" } else { tool })),
-            "Notification" => ("waiting", trunc(e["message"].as_str().unwrap_or("Waiting for you"), 70)),
+            "PermissionRequest" => ("permission", format!("Needs your OK to use {}", if tool.is_empty() { "a tool" } else { tool })),
+            "Notification" => {
+                let m = e["message"].as_str().unwrap_or("Waiting for you");
+                let l = m.to_lowercase();
+                let state = if l.contains("rate limit") || l.contains("usage limit") { "ratelimit" }
+                    else if l.contains("permission") { "permission" } else { "waiting" };
+                (state, trunc(m, 70))
+            }
+            "StopFailure" => {
+                let l = e.to_string().to_lowercase();
+                if l.contains("rate") || l.contains("limit") || l.contains("429") { ("ratelimit", "Hit a usage limit".into()) }
+                else { ("error", "The turn stopped with an error".into()) }
+            }
+            "PreCompact" if e["trigger"] == "auto" => ("context", "Context is full, compacting".into()),
             "PreCompact" => ("compact", "Compacting the conversation".into()),
             "Stop" => ("done", if self.said.is_empty() { "Done! Your turn".into() } else { format!("Done: {}", trunc(&self.said, 80)) }),
-            "SessionEnd" => ("idle", "Session ended".into()),
+            "SessionEnd" => ("bye", "Session ended. Bye!".into()),
             _ => return false,
         };
         self.set(state, label);
@@ -305,7 +372,11 @@ fn read_transcript(path: &str) -> (String, String) {
 }
 
 fn idle_label(state: &str) -> String {
-    if state == "sleep" { "Zzz… nothing to do".into() } else { "Idle, waiting for Claude".into() }
+    match state {
+        "sleep" => "Zzz… nothing to do".into(),
+        "bored" => "Bored… give Claude something to do".into(),
+        _ => "Idle, waiting for Claude".into(),
+    }
 }
 
 fn build_menu(cfg: &Config) -> Menu {
@@ -400,7 +471,7 @@ fn main() {
     let server_proxy = proxy.clone();
     thread::spawn(move || serve(listener, server_proxy));
 
-    let mut pet = Pet { cfg, state: "idle", label: idle_label("idle"), prompt: String::new(), said: String::new(), model: String::new(), effort: String::new(), mode: String::new(), generation: Arc::new(AtomicU64::new(0)), proxy };
+    let mut pet = Pet { cfg, state: "idle", anim: String::new(), label: idle_label("idle"), prompt: String::new(), said: String::new(), model: String::new(), effort: String::new(), mode: String::new(), generation: Arc::new(AtomicU64::new(0)), proxy };
     pet.set("idle", idle_label("idle"));
     let mut _menu_alive: Option<Menu> = None;
 
@@ -426,7 +497,7 @@ fn main() {
             },
             Event::UserEvent(UserEvent::Menu(id)) => {
                 if id == "quit" { *control_flow = ControlFlow::Exit; return; }
-                if let Some(p) = id.strip_prefix("pack:") { pet.cfg.pack = p.to_string(); }
+                if let Some(p) = id.strip_prefix("pack:") { pet.cfg.pack = p.to_string(); pet.anim = animation(p, pet.state); }
                 if let Some(s) = id.strip_prefix("size:").and_then(|s| s.parse().ok()) {
                     pet.cfg.size = s;
                     window.set_inner_size(LogicalSize::new(s + LABEL_W, s + LABEL_H));
